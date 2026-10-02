@@ -1,0 +1,48 @@
+{
+  "tool": "refund_order",
+  "effect_type": "non_idempotent_write",
+  "max_retries": 1,
+  "requires_fresh_state": true,
+  "irreversible": true,
+  "on_unknown_effect": "reconcile",
+  "preconditions": [
+    {
+      "path": "order.exists",
+      "op": "eq",
+      "value": true,
+      "code": "ORDER_NOT_FOUND",
+      "message": "Order must exist."
+    },
+    {
+      "path": "order.user_confirmed",
+      "op": "eq",
+      "value": true,
+      "code": "USER_CONFIRMATION_REQUIRED",
+      "message": "Refund requires explicit user confirmation."
+    },
+    {
+      "path": "order.payment_settled",
+      "op": "eq",
+      "value": true,
+      "code": "PAYMENT_NOT_SETTLED",
+      "message": "Payment must be settled before refund."
+    },
+    {
+      "path": "order.refund_eligible",
+      "op": "eq",
+      "value": true,
+      "code": "REFUND_NOT_ELIGIBLE",
+      "message": "Order is not eligible for refund."
+    }
+  ],
+  "postconditions": [
+    {
+      "path": "order.refund_status",
+      "op": "eq",
+      "value": "completed",
+      "code": "REFUND_EFFECT_MISMATCH",
+      "message": "Refund call returned success but authoritative refund state is not completed."
+    }
+  ],
+  "require_idempotency_key": true
+}
