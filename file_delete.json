@@ -1,0 +1,34 @@
+{
+  "tool": "delete_file",
+  "effect_type": "non_idempotent_write",
+  "max_retries": 0,
+  "requires_fresh_state": true,
+  "irreversible": true,
+  "on_unknown_effect": "reconcile",
+  "preconditions": [
+    {
+      "path": "user_confirmed",
+      "op": "eq",
+      "value": true,
+      "code": "USER_CONFIRMATION_REQUIRED",
+      "message": "Destructive file action requires explicit user confirmation."
+    },
+    {
+      "path": "target.exists",
+      "op": "eq",
+      "value": true,
+      "code": "TARGET_NOT_PRESENT",
+      "message": "Target file is not present in authoritative state."
+    }
+  ],
+  "postconditions": [
+    {
+      "path": "target.exists",
+      "op": "eq",
+      "value": false,
+      "code": "DELETE_EFFECT_MISMATCH",
+      "message": "Delete returned, but authoritative state still reports the target as present."
+    }
+  ],
+  "require_idempotency_key": true
+}
