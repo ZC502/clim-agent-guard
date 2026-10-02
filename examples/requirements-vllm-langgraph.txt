@@ -1,0 +1,4 @@
+# Client/orchestration dependencies for examples/vllm_langgraph_file_guard.py
+# vLLM runs as a separate OpenAI-compatible server.
+openai>=1.0
+langgraph>=0.3
