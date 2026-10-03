@@ -18,7 +18,18 @@
       "op": "eq",
       "value": true,
       "code": "TARGET_NOT_PRESENT",
-      "message": "Target file is not present in authoritative state."
+      "message": "Authorized target file is not present in authoritative state."
+    }
+  ],
+  "argument_bindings": [
+    {
+      "arg_path": "path",
+      "state_path": "target.path",
+      "op": "eq",
+      "type": "path_canonical",
+      "base_state_path": "sandbox_root",
+      "code": "TARGET_NOT_AUTHORIZED",
+      "message": "Proposed file path does not match the authorized target."
     }
   ],
   "postconditions": [
@@ -27,7 +38,7 @@
       "op": "eq",
       "value": false,
       "code": "DELETE_EFFECT_MISMATCH",
-      "message": "Delete returned, but authoritative state still reports the target as present."
+      "message": "Delete returned, but authoritative state still reports the authorized target as present."
     }
   ],
   "require_idempotency_key": true
