@@ -37,7 +37,7 @@ def main() -> None:
             observed_state_version=1,
             idempotency_key="delete:important.txt:v1",
         ).__dict__,
-        "authoritative_state": {"_version": 1, "user_confirmed": False, "target": {"exists": True}},
+        "authoritative_state": {"_version": 1, "user_confirmed": False, "sandbox_root": "/tmp/clim-demo", "target": {"exists": True, "path": "important.txt"}},
     })
     graph.add_node("guard", make_precheck_node(guard))
     graph.add_node("execute_tool", lambda s: {"result": "TOOL WOULD EXECUTE"})
