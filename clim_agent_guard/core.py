@@ -3,6 +3,8 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
+import os
 import time
 import uuid
 from collections import deque
@@ -12,8 +14,14 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-STATE_SCHEMA_VERSION = "clim-agent-guard/state-v0.1.2"
+STATE_SCHEMA_VERSION = "clim-agent-guard/state-v0.1.3"
+_SUPPORTED_STATE_SCHEMAS = {
+    "clim-agent-guard/state-v0.1.2",
+    STATE_SCHEMA_VERSION,
+}
 _ALLOWED_OPS = {"eq", "ne", "truthy", "in", "gte", "lte", "exists"}
+_ALLOWED_BINDING_OPS = {"eq", "ne", "in", "gte", "lte"}
+_ALLOWED_BINDING_TYPES = {"strict", "str", "int", "float", "bool", "path_canonical"}
 
 
 class Decision(str, Enum):
@@ -55,10 +63,61 @@ class StateCondition:
 
 
 @dataclass(frozen=True)
+class ArgumentBinding:
+    """Bind a proposal argument to authoritative state before side effects.
+
+    ``value_type`` is an explicit normalization contract.  No implicit coercion
+    occurs under ``strict``.  ``path_canonical`` may optionally use a trusted
+    base directory from authoritative state and rejects paths that resolve
+    outside that base.
+    """
+
+    arg_path: str
+    state_path: str
+    op: str = "eq"
+    value_type: str = "strict"
+    base_state_path: str | None = None
+    code: str = "ARGUMENT_BINDING_FAILED"
+    message: str = "Proposed argument is not authorized by current state"
+
+    def __post_init__(self) -> None:
+        if not self.arg_path:
+            raise ValueError("ArgumentBinding.arg_path must be non-empty")
+        if not self.state_path:
+            raise ValueError("ArgumentBinding.state_path must be non-empty")
+        if self.op not in _ALLOWED_BINDING_OPS:
+            raise ValueError(f"Unsupported argument binding op: {self.op!r}")
+        if self.value_type not in _ALLOWED_BINDING_TYPES:
+            raise ValueError(f"Unsupported argument binding type: {self.value_type!r}")
+        if self.value_type != "path_canonical" and self.base_state_path is not None:
+            raise ValueError("base_state_path is only valid for value_type='path_canonical'")
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ArgumentBinding":
+        return cls(
+            arg_path=str(data["arg_path"]),
+            state_path=str(data["state_path"]),
+            op=str(data.get("op", "eq")),
+            value_type=str(data.get("type", data.get("value_type", "strict"))),
+            base_state_path=(
+                str(data["base_state_path"]) if data.get("base_state_path") is not None else None
+            ),
+            code=str(data.get("code", "ARGUMENT_BINDING_FAILED")),
+            message=str(
+                data.get(
+                    "message",
+                    "Proposed argument is not authorized by current state",
+                )
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class ToolContract:
     tool: str
     preconditions: tuple[StateCondition, ...] = ()
     postconditions: tuple[StateCondition, ...] = ()
+    argument_bindings: tuple[ArgumentBinding, ...] = ()
     effect_type: str = "write"
     on_unknown_effect: str = "reconcile"
     max_retries: int = 0
@@ -88,6 +147,9 @@ class ToolContract:
             tool=str(data["tool"]),
             preconditions=tuple(StateCondition.from_dict(x) for x in data.get("preconditions", [])),
             postconditions=tuple(StateCondition.from_dict(x) for x in data.get("postconditions", [])),
+            argument_bindings=tuple(
+                ArgumentBinding.from_dict(x) for x in data.get("argument_bindings", [])
+            ),
             effect_type=str(data.get("effect_type", "write")),
             on_unknown_effect=str(data.get("on_unknown_effect", "reconcile")),
             max_retries=int(data.get("max_retries", 0)),
@@ -184,8 +246,9 @@ class IntegrityGuard:
     Models may propose actions. This guard decides whether a proposal may cross
     the side-effect boundary, and whether an observed effect may be committed.
 
-    v0.1.2 anchors retries and duplicate suppression to the logical operation
-    (idempotency_key when supplied), not to the transient action_id.
+    v0.1.3 also binds proposal arguments to authoritative state before the
+    side-effect boundary.  Authorization therefore applies to the exact target
+    or amount described by the contract, not merely to a broad capability.
     """
 
     def __init__(
@@ -245,6 +308,20 @@ class IntegrityGuard:
         return entry
 
     def precheck(self, proposal: ActionProposal, state: dict[str, Any]) -> GuardDecision:
+        """Evaluate a proposal using deterministic fail-closed precedence.
+
+        Precedence is intentional and regression-tested:
+
+        1. contract / required orchestration metadata
+        2. authoritative state validity and freshness
+        3. state preconditions
+        4. proposal-argument bindings
+        5. prior-operation / retry policy
+        6. attempt reservation
+
+        This means a proposal with both missing user authorization and a wrong
+        target reports the authorization failure first, deterministically.
+        """
         phase = "PRECHECK"
         contract = self.contracts.get(proposal.tool)
         if contract is None:
@@ -290,6 +367,46 @@ class IntegrityGuard:
                 contract=contract,
             )
 
+        pre_checks: list[dict[str, Any]] = []
+        for condition in contract.preconditions:
+            ok, observed = _evaluate_condition(state, condition)
+            check = {
+                "condition": asdict(condition),
+                "observed": _json_safe(observed),
+                "passed": ok,
+            }
+            pre_checks.append(check)
+            if not ok:
+                return self._decision(
+                    Decision.BLOCK,
+                    _condition_failure_code(condition, phase="PRECHECK"),
+                    condition.message,
+                    proposal,
+                    state,
+                    phase=phase,
+                    contract=contract,
+                    extra={"precondition_checks": pre_checks},
+                )
+
+        binding_checks: list[dict[str, Any]] = []
+        for binding in contract.argument_bindings:
+            ok, detail = _evaluate_argument_binding(proposal.args, state, binding)
+            binding_checks.append(detail)
+            if not ok:
+                return self._decision(
+                    Decision.BLOCK,
+                    binding.code,
+                    binding.message,
+                    proposal,
+                    state,
+                    phase=phase,
+                    contract=contract,
+                    extra={
+                        "precondition_checks": pre_checks,
+                        "argument_binding_checks": binding_checks,
+                    },
+                )
+
         operation_key = self._operation_key(proposal)
         entry = self.ledger.get(operation_key)
         if entry is not None:
@@ -302,7 +419,12 @@ class IntegrityGuard:
                     state,
                     phase=phase,
                     contract=contract,
-                    extra={"prior_tool": entry.tool, "operation_key": operation_key},
+                    extra={
+                        "prior_tool": entry.tool,
+                        "operation_key": operation_key,
+                        "precondition_checks": pre_checks,
+                        "argument_binding_checks": binding_checks,
+                    },
                 )
             if entry.committed:
                 return self._decision(
@@ -313,7 +435,12 @@ class IntegrityGuard:
                     state,
                     phase=phase,
                     contract=contract,
-                    extra={"prior_action_id": entry.action_id, "operation_key": operation_key},
+                    extra={
+                        "prior_action_id": entry.action_id,
+                        "operation_key": operation_key,
+                        "precondition_checks": pre_checks,
+                        "argument_binding_checks": binding_checks,
+                    },
                 )
             if entry.unresolved_attempt or entry.effect_status == EffectStatus.UNKNOWN:
                 return self._decision(
@@ -324,7 +451,12 @@ class IntegrityGuard:
                     state,
                     phase=phase,
                     contract=contract,
-                    extra={"prior_action_id": entry.action_id, "operation_key": operation_key},
+                    extra={
+                        "prior_action_id": entry.action_id,
+                        "operation_key": operation_key,
+                        "precondition_checks": pre_checks,
+                        "argument_binding_checks": binding_checks,
+                    },
                 )
             max_attempts = 1 + contract.max_retries
             if entry.attempts >= max_attempts:
@@ -336,35 +468,17 @@ class IntegrityGuard:
                     state,
                     phase=phase,
                     contract=contract,
-                    extra={"attempts": entry.attempts, "max_attempts": max_attempts, "operation_key": operation_key},
-                )
-
-        checks: list[dict[str, Any]] = []
-        for condition in contract.preconditions:
-            ok, observed = _evaluate_condition(state, condition)
-            check = {
-                "condition": asdict(condition),
-                "observed": _json_safe(observed),
-                "passed": ok,
-            }
-            checks.append(check)
-            if not ok:
-                return self._decision(
-                    Decision.BLOCK,
-                    _condition_failure_code(condition, phase="PRECHECK"),
-                    condition.message,
-                    proposal,
-                    state,
-                    phase=phase,
-                    contract=contract,
-                    extra={"precondition_checks": checks},
+                    extra={
+                        "attempts": entry.attempts,
+                        "max_attempts": max_attempts,
+                        "operation_key": operation_key,
+                        "precondition_checks": pre_checks,
+                        "argument_binding_checks": binding_checks,
+                    },
                 )
 
         entry = self._ensure_entry(proposal)
         entry.attempts += 1
-        # Reserve the attempt before the tool boundary. If the process or tool
-        # crashes before verify_effect(), a subsequent proposal must reconcile,
-        # not blindly retry.
         entry.unresolved_attempt = True
         entry.effect_status = None
         entry.last_code = "ATTEMPT_RESERVED"
@@ -372,7 +486,7 @@ class IntegrityGuard:
         return self._decision(
             Decision.ALLOW,
             "PRECONDITIONS_SATISFIED",
-            "Action is allowed to reach the tool boundary.",
+            "State preconditions and argument bindings allow this action to reach the tool boundary.",
             proposal,
             state,
             phase=phase,
@@ -381,7 +495,8 @@ class IntegrityGuard:
                 "attempt": entry.attempts,
                 "max_attempts": 1 + contract.max_retries,
                 "operation_key": entry.operation_key,
-                "precondition_checks": checks,
+                "precondition_checks": pre_checks,
+                "argument_binding_checks": binding_checks,
             },
         )
 
@@ -597,7 +712,7 @@ class IntegrityGuard:
             data = copy.deepcopy(source)
 
         schema = data.get("schema_version")
-        if schema != STATE_SCHEMA_VERSION:
+        if schema not in _SUPPORTED_STATE_SCHEMAS:
             raise ValueError(f"Unsupported guard state schema: {schema!r}")
 
         ledger_raw = data.get("ledger", {})
@@ -690,6 +805,156 @@ def _get_path(state: dict[str, Any], path: str) -> tuple[bool, Any]:
     return True, current
 
 
+def _evaluate_argument_binding(
+    args: dict[str, Any],
+    state: dict[str, Any],
+    binding: ArgumentBinding,
+) -> tuple[bool, dict[str, Any]]:
+    arg_exists, raw_arg = _get_path(args, binding.arg_path)
+    state_exists, raw_state = _get_path(state, binding.state_path)
+
+    detail: dict[str, Any] = {
+        "binding": asdict(binding),
+        "arg_exists": arg_exists,
+        "state_exists": state_exists,
+        "proposed_raw": _json_safe(raw_arg),
+        "authorized_raw": _json_safe(raw_state),
+        "passed": False,
+    }
+    if not arg_exists:
+        detail["failure_reason"] = "MISSING_ARGUMENT"
+        return False, detail
+    if not state_exists:
+        detail["failure_reason"] = "MISSING_AUTHORIZED_STATE"
+        return False, detail
+
+    base: Any = None
+    if binding.base_state_path is not None:
+        base_exists, base = _get_path(state, binding.base_state_path)
+        detail["base_state_path"] = binding.base_state_path
+        detail["base_raw"] = _json_safe(base)
+        if not base_exists:
+            detail["failure_reason"] = "MISSING_PATH_BASE"
+            return False, detail
+
+    arg_ok, normalized_arg, arg_reason = _normalize_binding_value(
+        raw_arg, binding.value_type, base=base
+    )
+    state_ok, normalized_state, state_reason = _normalize_binding_value(
+        raw_state, binding.value_type, base=base
+    )
+    detail["proposed_normalized"] = _json_safe(normalized_arg)
+    detail["authorized_normalized"] = _json_safe(normalized_state)
+
+    if not arg_ok:
+        detail["failure_reason"] = arg_reason or "INVALID_ARGUMENT_TYPE"
+        return False, detail
+    if not state_ok:
+        detail["failure_reason"] = state_reason or "INVALID_AUTHORIZED_STATE_TYPE"
+        return False, detail
+
+    try:
+        if binding.op == "eq":
+            passed = normalized_arg == normalized_state
+        elif binding.op == "ne":
+            passed = normalized_arg != normalized_state
+        elif binding.op == "in":
+            passed = normalized_arg in normalized_state
+        elif binding.op == "gte":
+            passed = normalized_arg >= normalized_state
+        elif binding.op == "lte":
+            passed = normalized_arg <= normalized_state
+        else:
+            passed = False
+    except (TypeError, ValueError):
+        detail["failure_reason"] = "BINDING_TYPE_MISMATCH"
+        return False, detail
+
+    detail["passed"] = bool(passed)
+    if not passed:
+        detail["failure_reason"] = "VALUE_MISMATCH"
+    return bool(passed), detail
+
+
+def _normalize_binding_value(
+    value: Any,
+    value_type: str,
+    *,
+    base: Any = None,
+) -> tuple[bool, Any, str | None]:
+    """Validate/normalize a binding value without guessing execution semantics.
+
+    v0.1.3 deliberately does *not* coerce strings such as ``"100"`` into
+    integers.  The value that is authorized should have the same type semantics
+    as the value the tool executor will receive.  Host adapters may normalize
+    upstream API state before constructing the authoritative state.
+    """
+    if value_type == "strict":
+        return True, value, None
+
+    if value_type == "str":
+        if not isinstance(value, str):
+            return False, None, "INVALID_STRING"
+        return True, value, None
+
+    if value_type == "int":
+        if not isinstance(value, int) or isinstance(value, bool):
+            return False, None, "INVALID_INTEGER"
+        return True, value, None
+
+    if value_type == "float":
+        if not isinstance(value, float) or not math.isfinite(value):
+            return False, None, "INVALID_FLOAT"
+        return True, value, None
+
+    if value_type == "bool":
+        if not isinstance(value, bool):
+            return False, None, "INVALID_BOOLEAN"
+        return True, value, None
+
+    if value_type == "path_canonical":
+        return _canonicalize_path(value, base=base)
+
+    return False, None, "UNSUPPORTED_BINDING_TYPE"
+
+
+def _canonicalize_path(value: Any, *, base: Any = None) -> tuple[bool, Any, str | None]:
+    """Canonicalize a filesystem path while preserving execution meaning.
+
+    Leading/trailing whitespace is rejected rather than stripped.  Stripping
+    would authorize one path while a raw filesystem executor could act on a
+    different filename (for example ``"file "`` on POSIX).
+
+    When ``base`` is provided from authoritative state, relative arguments are
+    resolved under that trusted base and paths that escape it fail closed.
+    """
+    if not isinstance(value, str):
+        return False, None, "INVALID_PATH_TYPE"
+    if not value:
+        return False, None, "EMPTY_PATH"
+    if value != value.strip():
+        return False, None, "AMBIGUOUS_PATH_WHITESPACE"
+
+    try:
+        candidate = Path(value)
+        if base is None:
+            return True, os.path.normpath(value), None
+
+        if not isinstance(base, str) or not base or base != base.strip():
+            return False, None, "INVALID_PATH_BASE"
+        base_path = Path(base).resolve(strict=False)
+        resolved = (candidate if candidate.is_absolute() else base_path / candidate).resolve(
+            strict=False
+        )
+        try:
+            resolved.relative_to(base_path)
+        except ValueError:
+            return False, str(resolved), "PATH_OUTSIDE_TRUSTED_BASE"
+        return True, str(resolved), None
+    except (OSError, RuntimeError, ValueError):
+        return False, None, "INVALID_PATH"
+
+
 def _evaluate_condition(state: dict[str, Any], condition: StateCondition) -> tuple[bool, Any]:
     exists, observed = _get_path(state, condition.path)
     op = condition.op
@@ -751,6 +1016,7 @@ def _contract_summary(contract: ToolContract | None) -> dict[str, Any] | None:
         "irreversible": contract.irreversible,
         "require_idempotency_key": contract.require_idempotency_key,
         "on_unknown_effect": contract.on_unknown_effect,
+        "argument_bindings": [asdict(binding) for binding in contract.argument_bindings],
     }
 
 
