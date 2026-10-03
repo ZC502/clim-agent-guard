@@ -104,7 +104,7 @@ def run_guarded(contract_path: Path) -> dict:
 
 def main() -> None:
     contract = Path(__file__).parents[1] / "contracts" / "refund_order.json"
-    print("CLIM Agent Guard v0.1.2 — UNKNOWN_EFFECT demo")
+    print("CLIM Agent Guard v0.1.3 — UNKNOWN_EFFECT demo")
     print("Models propose. Systems enforce.")
     baseline = run_baseline()
     guarded = run_guarded(contract)
