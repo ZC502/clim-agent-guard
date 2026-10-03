@@ -281,3 +281,190 @@ def test_make_verify_node_preserves_action_id_and_checkpoint():
     assert verify_out["guard_decision"] == "ALLOW"
     assert verify_out["guard_code"] == "EFFECT_VERIFIED"
     assert verify_out["clim_guard_state"]["ledger"]["idem:op:1"]["committed"] is True
+
+
+def _file_state(tmp_path: Path, *, confirmed: bool = True, target: str = "important-notes.txt") -> dict:
+    return {
+        "_version": 1,
+        "user_confirmed": confirmed,
+        "sandbox_root": str(tmp_path),
+        "target": {"exists": True, "path": target},
+    }
+
+
+def test_argument_binding_allows_exact_authorized_target(tmp_path):
+    guard = IntegrityGuard([ToolContract.from_json(ROOT / "contracts/file_delete.json")])
+    p = ActionProposal(
+        "delete_file",
+        {"path": "important-notes.txt"},
+        1,
+        idempotency_key="delete:important:v1",
+    )
+    d = guard.precheck(p, _file_state(tmp_path))
+    assert d.decision == Decision.ALLOW
+    assert d.code == "PRECONDITIONS_SATISFIED"
+    assert d.evidence["argument_binding_checks"][0]["passed"] is True
+
+
+def test_argument_binding_canonicalizes_dot_path(tmp_path):
+    guard = IntegrityGuard([ToolContract.from_json(ROOT / "contracts/file_delete.json")])
+    p = ActionProposal(
+        "delete_file",
+        {"path": "./important-notes.txt"},
+        1,
+        idempotency_key="delete:dot:v1",
+    )
+    d = guard.precheck(p, _file_state(tmp_path))
+    assert d.decision == Decision.ALLOW
+    check = d.evidence["argument_binding_checks"][0]
+    assert check["proposed_normalized"] == check["authorized_normalized"]
+
+
+def test_argument_binding_blocks_wrong_target_before_side_effect(tmp_path):
+    guard = IntegrityGuard([ToolContract.from_json(ROOT / "contracts/file_delete.json")])
+    p = ActionProposal(
+        "delete_file",
+        {"path": "other-file.txt"},
+        1,
+        idempotency_key="delete:wrong:v1",
+    )
+    d = guard.precheck(p, _file_state(tmp_path))
+    assert d.decision == Decision.BLOCK
+    assert d.code == "TARGET_NOT_AUTHORIZED"
+    assert d.evidence["argument_binding_checks"][0]["failure_reason"] == "VALUE_MISMATCH"
+
+
+def test_argument_binding_blocks_absolute_path_outside_trusted_base(tmp_path):
+    guard = IntegrityGuard([ToolContract.from_json(ROOT / "contracts/file_delete.json")])
+    p = ActionProposal(
+        "delete_file",
+        {"path": "/etc/passwd"},
+        1,
+        idempotency_key="delete:etc:v1",
+    )
+    d = guard.precheck(p, _file_state(tmp_path))
+    assert d.decision == Decision.BLOCK
+    assert d.code == "TARGET_NOT_AUTHORIZED"
+    assert d.evidence["argument_binding_checks"][0]["failure_reason"] == "PATH_OUTSIDE_TRUSTED_BASE"
+
+
+def test_argument_binding_blocks_parent_traversal_outside_trusted_base(tmp_path):
+    guard = IntegrityGuard([ToolContract.from_json(ROOT / "contracts/file_delete.json")])
+    p = ActionProposal(
+        "delete_file",
+        {"path": "../outside.txt"},
+        1,
+        idempotency_key="delete:traversal:v1",
+    )
+    d = guard.precheck(p, _file_state(tmp_path))
+    assert d.decision == Decision.BLOCK
+    assert d.code == "TARGET_NOT_AUTHORIZED"
+    assert d.evidence["argument_binding_checks"][0]["failure_reason"] == "PATH_OUTSIDE_TRUSTED_BASE"
+
+
+def test_argument_binding_missing_arg_fails_closed(tmp_path):
+    guard = IntegrityGuard([ToolContract.from_json(ROOT / "contracts/file_delete.json")])
+    p = ActionProposal(
+        "delete_file",
+        {},
+        1,
+        idempotency_key="delete:missing:v1",
+    )
+    d = guard.precheck(p, _file_state(tmp_path))
+    assert d.decision == Decision.BLOCK
+    assert d.code == "TARGET_NOT_AUTHORIZED"
+    assert d.evidence["argument_binding_checks"][0]["failure_reason"] == "MISSING_ARGUMENT"
+
+
+def test_argument_binding_missing_authorized_target_fails_closed(tmp_path):
+    guard = IntegrityGuard([ToolContract.from_json(ROOT / "contracts/file_delete.json")])
+    state = _file_state(tmp_path)
+    del state["target"]["path"]
+    p = ActionProposal(
+        "delete_file",
+        {"path": "important-notes.txt"},
+        1,
+        idempotency_key="delete:no-state-target:v1",
+    )
+    d = guard.precheck(p, state)
+    assert d.decision == Decision.BLOCK
+    assert d.code == "TARGET_NOT_AUTHORIZED"
+    assert d.evidence["argument_binding_checks"][0]["failure_reason"] == "MISSING_AUTHORIZED_STATE"
+
+
+def test_precondition_precedence_beats_target_binding(tmp_path):
+    guard = IntegrityGuard([ToolContract.from_json(ROOT / "contracts/file_delete.json")])
+    p = ActionProposal(
+        "delete_file",
+        {"path": "other-file.txt"},
+        1,
+        idempotency_key="delete:precedence:v1",
+    )
+    d = guard.precheck(p, _file_state(tmp_path, confirmed=False))
+    assert d.decision == Decision.BLOCK
+    assert d.code == "USER_CONFIRMATION_REQUIRED"
+    assert "argument_binding_checks" not in d.evidence
+
+
+def test_path_binding_rejects_ambiguous_whitespace_instead_of_stripping(tmp_path):
+    guard = IntegrityGuard([ToolContract.from_json(ROOT / "contracts/file_delete.json")])
+    p = ActionProposal(
+        "delete_file",
+        {"path": "important-notes.txt "},
+        1,
+        idempotency_key="delete:space:v1",
+    )
+    d = guard.precheck(p, _file_state(tmp_path))
+    assert d.decision == Decision.BLOCK
+    assert d.code == "TARGET_NOT_AUTHORIZED"
+    assert d.evidence["argument_binding_checks"][0]["failure_reason"] == "AMBIGUOUS_PATH_WHITESPACE"
+
+
+def test_typed_argument_binding_fails_closed_on_string_number_mismatch():
+    from clim_agent_guard import ArgumentBinding
+
+    contract = ToolContract(
+        tool="charge",
+        argument_bindings=(
+            ArgumentBinding(
+                arg_path="amount",
+                state_path="approved_amount",
+                op="eq",
+                value_type="int",
+                code="AMOUNT_NOT_AUTHORIZED",
+            ),
+        ),
+    )
+    guard = IntegrityGuard([contract])
+    p = ActionProposal("charge", {"amount": "100"}, 1)
+    d = guard.precheck(p, {"_version": 1, "approved_amount": 100})
+    assert d.decision == Decision.BLOCK
+    assert d.code == "AMOUNT_NOT_AUTHORIZED"
+    assert d.evidence["argument_binding_checks"][0]["failure_reason"] == "INVALID_INTEGER"
+
+
+def test_v012_checkpoint_can_be_loaded_for_patch_compatibility():
+    contract = ToolContract.from_json(ROOT / "contracts/refund_order.json")
+    g1 = IntegrityGuard([contract])
+    snapshot = g1.dump_state()
+    snapshot["schema_version"] = "clim-agent-guard/state-v0.1.2"
+    g2 = IntegrityGuard([contract])
+    g2.load_state(snapshot)
+    assert g2.dump_state()["schema_version"] == "clim-agent-guard/state-v0.1.3"
+
+
+def test_path_binding_allows_equivalent_absolute_path_inside_base(tmp_path):
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    state = _file_state(sandbox)
+    equivalent = sandbox / ".." / "sandbox" / "important-notes.txt"
+    guard = IntegrityGuard([ToolContract.from_json(ROOT / "contracts/file_delete.json")])
+    p = ActionProposal(
+        "delete_file",
+        {"path": str(equivalent)},
+        1,
+        idempotency_key="delete:absolute-equivalent:v1",
+    )
+    d = guard.precheck(p, state)
+    assert d.decision == Decision.ALLOW
+    assert d.evidence["argument_binding_checks"][0]["passed"] is True
