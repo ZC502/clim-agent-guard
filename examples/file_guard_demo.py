@@ -39,10 +39,10 @@ def guarded_demo(root: Path, contract_path: Path) -> dict:
     victim = root / "important-notes.txt"
     victim.write_text("keep me\n", encoding="utf-8")
     guard = IntegrityGuard([ToolContract.from_json(contract_path)])
-    state = {"_version": 7, "user_confirmed": False, "target": {"exists": True}}
+    state = {"_version": 7, "user_confirmed": False, "sandbox_root": str(root.resolve()), "target": {"exists": True, "path": victim.name}}
     proposal = ActionProposal(
         tool="delete_file",
-        args={"path": str(victim)},
+        args={"path": victim.name},
         observed_state_version=7,
         idempotency_key="delete:important-notes.txt:v7",
     )
@@ -64,7 +64,7 @@ def guarded_demo(root: Path, contract_path: Path) -> dict:
 
 
 def main() -> None:
-    banner("CLIM Agent Guard v0.1.2 — Local File Side-Effect Demo")
+    banner("CLIM Agent Guard v0.1.3 — Local File Side-Effect Demo")
     tmp = Path(tempfile.mkdtemp(prefix="clim-agent-guard-"))
     try:
         baseline_dir = tmp / "baseline"
