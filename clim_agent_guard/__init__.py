@@ -1,5 +1,6 @@
 from .core import (
     ActionProposal,
+    ArgumentBinding,
     Decision,
     EffectStatus,
     GuardDecision,
@@ -10,6 +11,7 @@ from .core import (
 
 __all__ = [
     "ActionProposal",
+    "ArgumentBinding",
     "Decision",
     "EffectStatus",
     "GuardDecision",
