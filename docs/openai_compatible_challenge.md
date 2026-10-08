@@ -69,6 +69,7 @@ not perform automatic `UNKNOWN_EFFECT` reconciliation; use the repo's
   caps both model rounds and tool-call processing.
 - The endpoint can see your prompts. Only send test text to endpoints you trust.
 
+State version checking mitigates time-of-check/time-of-use races but does not eliminate them. True atomic execution requires executor-level guarantees.
 The original 44-run vLLM + LangGraph matrix is **not** an interchangeable
 baseline for this runner. Different prompting, tool schema, SDK, model or
 server can change whether/what the model proposes. Rerun all target scenarios
