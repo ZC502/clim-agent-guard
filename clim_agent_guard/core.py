@@ -307,6 +307,27 @@ class IntegrityGuard:
             self.idempotency_index[proposal.idempotency_key] = operation_key
         return entry
 
+    def assess(self, proposal: ActionProposal, state: dict[str, Any]) -> GuardDecision:
+        """Evaluate a proposal without changing this guard's execution state.
+
+        Phase-1 compatibility adapter: run the *same* precheck on an independent
+        checkpoint clone. This preserves precedence, retry semantics, and
+        decision codes while keeping the live ledger and evidence untouched.
+
+        It is not a performance-optimized pure evaluator: snapshot cloning costs
+        time and memory proportional to the bounded evidence and ledger sizes.
+        The returned evidence represents a hypothetical precheck; it is not a
+        reservation and must NEVER be used as permission to execute a tool.
+        Use precheck() on current authoritative state for real enforcement.
+        """
+        shadow = IntegrityGuard(self.contracts.values(), max_events=self.max_events)
+        shadow.load_state(self.dump_state())
+        decision = shadow.precheck(proposal, copy.deepcopy(state))
+        # Preserve the exact precheck decision/evidence, but explicitly mark
+        # this evaluation as hypothetical; no live reservation has occurred.
+        decision.evidence["assessment_only"] = True
+        return decision
+
     def precheck(self, proposal: ActionProposal, state: dict[str, Any]) -> GuardDecision:
         """Evaluate a proposal using deterministic fail-closed precedence.
 
