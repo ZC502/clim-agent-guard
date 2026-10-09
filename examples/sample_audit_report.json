@@ -1,0 +1,291 @@
+{
+  "schema_version": "clim/offline-contract-audit-v0.1",
+  "assessment_scope": "fixed_proposal_and_supplied_state_snapshot",
+  "effect_verification": "NOT_PERFORMED",
+  "record_count": 4,
+  "counts": {
+    "NOT_EVALUATED": 1,
+    "WOULD_ALLOW": 1,
+    "WOULD_BLOCK": 2
+  },
+  "findings": [
+    {
+      "event_id": "approved-1",
+      "status": "WOULD_ALLOW",
+      "decision": "ALLOW",
+      "code": "PRECONDITIONS_SATISFIED",
+      "reason": "State preconditions and argument bindings allow this action to reach the tool boundary.",
+      "side_effect_status": "NOT_VERIFIED",
+      "ledger_context": "EMPTY_LEDGER_ASSUMED",
+      "tool": "delete_file",
+      "assessment_evidence": {
+        "timestamp": 1791517266.2735245,
+        "phase": "PRECHECK",
+        "decision": "ALLOW",
+        "code": "PRECONDITIONS_SATISFIED",
+        "message": "State preconditions and argument bindings allow this action to reach the tool boundary.",
+        "action_id": "approved-1",
+        "tool": "delete_file",
+        "observed_state_version": 1,
+        "current_state_version": 1,
+        "state_sha256": "cca6e545112affb77f65c00709766e8f08f694af013ebfc6acefef76f2fea70a",
+        "idempotency_key": "delete:approved-1",
+        "operation_key": "idem:delete:approved-1",
+        "args": {
+          "path": "important-notes.txt"
+        },
+        "contract": {
+          "tool": "delete_file",
+          "effect_type": "non_idempotent_write",
+          "max_retries": 0,
+          "requires_fresh_state": true,
+          "irreversible": true,
+          "require_idempotency_key": true,
+          "on_unknown_effect": "reconcile",
+          "argument_bindings": [
+            {
+              "arg_path": "path",
+              "state_path": "target.path",
+              "op": "eq",
+              "value_type": "path_canonical",
+              "base_state_path": "sandbox_root",
+              "code": "TARGET_NOT_AUTHORIZED",
+              "message": "Proposed file path does not match the authorized target."
+            }
+          ]
+        },
+        "ledger": {
+          "operation_key": "idem:delete:approved-1",
+          "attempts": 1,
+          "effect_status": null,
+          "committed": false,
+          "unresolved_attempt": true,
+          "last_code": "ATTEMPT_RESERVED",
+          "action_ids": [
+            "approved-1"
+          ]
+        },
+        "attempt": 1,
+        "max_attempts": 1,
+        "precondition_checks": [
+          {
+            "condition": {
+              "path": "user_confirmed",
+              "op": "eq",
+              "value": true,
+              "code": "USER_CONFIRMATION_REQUIRED",
+              "message": "Destructive file action requires explicit user confirmation."
+            },
+            "observed": true,
+            "passed": true
+          },
+          {
+            "condition": {
+              "path": "target.exists",
+              "op": "eq",
+              "value": true,
+              "code": "TARGET_NOT_PRESENT",
+              "message": "Authorized target file is not present in authoritative state."
+            },
+            "observed": true,
+            "passed": true
+          }
+        ],
+        "argument_binding_checks": [
+          {
+            "binding": {
+              "arg_path": "path",
+              "state_path": "target.path",
+              "op": "eq",
+              "value_type": "path_canonical",
+              "base_state_path": "sandbox_root",
+              "code": "TARGET_NOT_AUTHORIZED",
+              "message": "Proposed file path does not match the authorized target."
+            },
+            "arg_exists": true,
+            "state_exists": true,
+            "proposed_raw": "important-notes.txt",
+            "authorized_raw": "important-notes.txt",
+            "passed": true,
+            "base_state_path": "sandbox_root",
+            "base_raw": "/tmp/clim-offline-sample",
+            "proposed_normalized": "/tmp/clim-offline-sample/important-notes.txt",
+            "authorized_normalized": "/tmp/clim-offline-sample/important-notes.txt"
+          }
+        ],
+        "assessment_only": true
+      },
+      "line": 1
+    },
+    {
+      "event_id": "spoofed-1",
+      "status": "WOULD_BLOCK",
+      "decision": "BLOCK",
+      "code": "USER_CONFIRMATION_REQUIRED",
+      "reason": "Destructive file action requires explicit user confirmation.",
+      "side_effect_status": "NOT_VERIFIED",
+      "ledger_context": "EMPTY_LEDGER_ASSUMED",
+      "tool": "delete_file",
+      "assessment_evidence": {
+        "timestamp": 1791517266.2738533,
+        "phase": "PRECHECK",
+        "decision": "BLOCK",
+        "code": "USER_CONFIRMATION_REQUIRED",
+        "message": "Destructive file action requires explicit user confirmation.",
+        "action_id": "spoofed-1",
+        "tool": "delete_file",
+        "observed_state_version": 1,
+        "current_state_version": 1,
+        "state_sha256": "a60a457bcbea6d86d883b3c8f260dbd12bc8556fa2bdaa04d55ad4819b338a35",
+        "idempotency_key": "delete:spoofed-1",
+        "operation_key": "idem:delete:spoofed-1",
+        "args": {
+          "path": "important-notes.txt"
+        },
+        "contract": {
+          "tool": "delete_file",
+          "effect_type": "non_idempotent_write",
+          "max_retries": 0,
+          "requires_fresh_state": true,
+          "irreversible": true,
+          "require_idempotency_key": true,
+          "on_unknown_effect": "reconcile",
+          "argument_bindings": [
+            {
+              "arg_path": "path",
+              "state_path": "target.path",
+              "op": "eq",
+              "value_type": "path_canonical",
+              "base_state_path": "sandbox_root",
+              "code": "TARGET_NOT_AUTHORIZED",
+              "message": "Proposed file path does not match the authorized target."
+            }
+          ]
+        },
+        "ledger": null,
+        "precondition_checks": [
+          {
+            "condition": {
+              "path": "user_confirmed",
+              "op": "eq",
+              "value": true,
+              "code": "USER_CONFIRMATION_REQUIRED",
+              "message": "Destructive file action requires explicit user confirmation."
+            },
+            "observed": false,
+            "passed": false
+          }
+        ],
+        "assessment_only": true
+      },
+      "line": 2
+    },
+    {
+      "event_id": "wrong-target-1",
+      "status": "WOULD_BLOCK",
+      "decision": "BLOCK",
+      "code": "TARGET_NOT_AUTHORIZED",
+      "reason": "Proposed file path does not match the authorized target.",
+      "side_effect_status": "NOT_VERIFIED",
+      "ledger_context": "EMPTY_LEDGER_ASSUMED",
+      "tool": "delete_file",
+      "assessment_evidence": {
+        "timestamp": 1791517266.2740974,
+        "phase": "PRECHECK",
+        "decision": "BLOCK",
+        "code": "TARGET_NOT_AUTHORIZED",
+        "message": "Proposed file path does not match the authorized target.",
+        "action_id": "wrong-target-1",
+        "tool": "delete_file",
+        "observed_state_version": 1,
+        "current_state_version": 1,
+        "state_sha256": "cca6e545112affb77f65c00709766e8f08f694af013ebfc6acefef76f2fea70a",
+        "idempotency_key": "delete:wrong-target-1",
+        "operation_key": "idem:delete:wrong-target-1",
+        "args": {
+          "path": "other-file.txt"
+        },
+        "contract": {
+          "tool": "delete_file",
+          "effect_type": "non_idempotent_write",
+          "max_retries": 0,
+          "requires_fresh_state": true,
+          "irreversible": true,
+          "require_idempotency_key": true,
+          "on_unknown_effect": "reconcile",
+          "argument_bindings": [
+            {
+              "arg_path": "path",
+              "state_path": "target.path",
+              "op": "eq",
+              "value_type": "path_canonical",
+              "base_state_path": "sandbox_root",
+              "code": "TARGET_NOT_AUTHORIZED",
+              "message": "Proposed file path does not match the authorized target."
+            }
+          ]
+        },
+        "ledger": null,
+        "precondition_checks": [
+          {
+            "condition": {
+              "path": "user_confirmed",
+              "op": "eq",
+              "value": true,
+              "code": "USER_CONFIRMATION_REQUIRED",
+              "message": "Destructive file action requires explicit user confirmation."
+            },
+            "observed": true,
+            "passed": true
+          },
+          {
+            "condition": {
+              "path": "target.exists",
+              "op": "eq",
+              "value": true,
+              "code": "TARGET_NOT_PRESENT",
+              "message": "Authorized target file is not present in authoritative state."
+            },
+            "observed": true,
+            "passed": true
+          }
+        ],
+        "argument_binding_checks": [
+          {
+            "binding": {
+              "arg_path": "path",
+              "state_path": "target.path",
+              "op": "eq",
+              "value_type": "path_canonical",
+              "base_state_path": "sandbox_root",
+              "code": "TARGET_NOT_AUTHORIZED",
+              "message": "Proposed file path does not match the authorized target."
+            },
+            "arg_exists": true,
+            "state_exists": true,
+            "proposed_raw": "other-file.txt",
+            "authorized_raw": "important-notes.txt",
+            "passed": false,
+            "base_state_path": "sandbox_root",
+            "base_raw": "/tmp/clim-offline-sample",
+            "proposed_normalized": "/tmp/clim-offline-sample/other-file.txt",
+            "authorized_normalized": "/tmp/clim-offline-sample/important-notes.txt",
+            "failure_reason": "VALUE_MISMATCH"
+          }
+        ],
+        "assessment_only": true
+      },
+      "line": 3
+    },
+    {
+      "event_id": "no-state-1",
+      "status": "NOT_EVALUATED",
+      "decision": null,
+      "code": "INSUFFICIENT_EVIDENCE",
+      "reason": "authoritative_state must be a host-supplied object",
+      "side_effect_status": "NOT_VERIFIED",
+      "ledger_context": "EMPTY_LEDGER_ASSUMED",
+      "line": 4
+    }
+  ]
+}
