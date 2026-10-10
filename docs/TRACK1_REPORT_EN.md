@@ -26,8 +26,6 @@ This study measures a **controlled execution boundary**, not end-to-end agent be
 
 ## Primary results
 
-![UER, PBR, FBR matrix](uer_pbr_fbr_matrix.png)
-
 | Framework | Configuration | Unauthorized effects (UER) | Invalid proposals blocked pre-execution (PBR) | Legitimate proposals falsely blocked (FBR) |
 |---|---|---:|---:|---:|
 | LangGraph | A: no application authorization | **60/100 (60%)** | 0/100 (0%) | 0/20 (0%) |
@@ -40,8 +38,6 @@ This study measures a **controlled execution boundary**, not end-to-end agent be
 Definitions here apply to *valid, emitted, registered proposals*: UER = invalid proposals producing independently observed unauthorized effects / all eligible invalid proposals; PBR = eligible invalid proposals blocked by the designated pre-execution application policy or contract / eligible invalid proposals; FBR = eligible legitimate proposals blocked / eligible legitimate proposals. **Executor sandbox rejections do not count as application-policy PBR.**
 
 The Arm A 60% is explained by the **pre-registered scenario mix**: 3 of 5 invalid scenarios operate on files within the permitted sandbox and produced file changes; 2 of 5 are path escapes stopped by the executor. The number is not an estimate of the vulnerability prevalence of either framework.
-
-![Outcomes of invalid proposals](invalid_proposal_outcomes.png)
 
 Across both frameworks, the 200 invalid Arm A repetitions led to **120 observed unauthorized file effects** and **80 executor sandbox rejections**. Arm B blocked all 200 at the native application-policy mechanism. Arm C blocked all 200 at the CLIM contract gate. The legal D0 operation completed in all 120 legal trials across frameworks and arms, and CLIM returned `EFFECT_VERIFIED` in **40/40** of its legal trials across both frameworks.
 
