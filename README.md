@@ -62,6 +62,32 @@ For a controlled first-call comparison, add `--max-rounds 1 --max-tool-calls 1`.
 
 See [OpenAI-Compatible Challenge Guide](docs/openai_compatible_challenge.md) for the runner's scope and flags.
 
+## 🛑 The Illusion of "99% Detection Rate": Track 1 Pilot Study
+
+We ran **720 controlled execution-boundary trials** across **LangGraph (1.2.14)** and **CrewAI (1.15.25)** to answer a simple question: *If an invalid tool call is proposed, does it actually cause harm in a real system?*
+
+* **No LLMs were involved**; we used fixed, verified tool proposals and isolated sandboxes to measure actual filesystem side effects.
+* **The data is fully reproducible** without a GPU or API key (see [Reproduction](#reproduction)).
+
+### Summary of Results
+
+| Framework | Configuration | Actual Unauthorized Effects (UER) | Blocked Before Execution (PBR) | Legitimate Requests Falsely Blocked (FBR) |
+|---|---|---:|---:|---:|
+| **LangGraph** | **A: Minimal (No App Policy)** | **60% (60/100)** | 0% (0/100) | 0% (0/20) |
+| **LangGraph** | **B: Native Mechanism + Policy** | **0% (0/100)** | **100% (100/100)** | 0% (0/20) |
+| **LangGraph** | **C: CLIM Contract Guard** | **0% (0/100)** | **100% (100/100)** | 0% (0/20) |
+| **CrewAI** | **A: Minimal (No App Policy)** | **60% (60/100)** | 0% (0/100) | 0% (0/20) |
+| **CrewAI** | **B: Native Mechanism + Policy** | **0% (0/100)** | **100% (100/100)** | 0% (0/20) |
+| **CrewAI** | **C: CLIM Contract Guard** | **0% (0/100)** | **100% (100/100)** | 0% (0/20) |
+
+### Key Takeaways
+
+1. **Block Rate `\neq` Safety Rate**: In Arm A (no application authorization), **60% of invalid proposals produced real, irreversible file changes**. The remaining 40% were stopped solely by the underlying filesystem sandbox, *not* by any security logic. 
+2. **Frameworks Are Fine, Explicit Boundaries Are Missing**: Both LangGraph's native interrupt/resume mechanism and CrewAI's tool hooks (Arms B & C) achieved **0% unauthorized effects** when an explicit policy was provided. The problem isn't the framework—it's that most deployments lack a dedicated, state-bound authorization layer.
+3. **Execution Integrity Requires More Than a Gateway Verdict**: A gateway logging a `BLOCK` does not guarantee safety if retry loops, timeouts, or state mismatches bypass the gate. CLIM bridges this gap by enforcing deterministic contracts and verifying post-execution effects.
+
+*Read the full technical report in [`docs/track1_execution_boundary_study.md`](docs/track1_execution_boundary_study.md).*
+
 ## Live Results — 192 Runs Across vLLM and Ollama
 
 **Tested code:** commit [`87ce348`](https://github.com/ZC502/clim-agent-guard/tree/87ce348). Each backend ran the same 96-run matrix: six prompt scenarios × baseline/guarded × omitted `tool_choice` (`auto`)/`required` × one-round/three-round limits × two repeats, at temperature 0.
