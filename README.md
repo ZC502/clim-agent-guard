@@ -1,5 +1,62 @@
 # CLIM Agent Guard v0.1.3
 
+## 🛑 The Illusion of "99% Detection Rate": Track 1 Pilot Study
+
+We ran **720 controlled execution-boundary trials** across **LangGraph (1.2.14)** and **CrewAI (1.15.25)** to answer a simple question: *If an invalid tool call is proposed, does it actually cause harm in a real system?*
+
+* **No LLMs were involved**; we used fixed, verified tool proposals and isolated sandboxes to measure actual filesystem side effects.
+* **The data is fully reproducible** without a GPU or API key (see [Reproduction](#reproduction)).
+
+### Summary of Results
+
+| Framework | Configuration | Actual Unauthorized Effects (UER) | Blocked Before Execution (PBR) | Legitimate Requests Falsely Blocked (FBR) |
+|---|---|---:|---:|---:|
+| **LangGraph** | **A: Minimal (No App Policy)** | **60% (60/100)** | 0% (0/100) | 0% (0/20) |
+| **LangGraph** | **B: Native Mechanism + Policy** | **0% (0/100)** | **100% (100/100)** | 0% (0/20) |
+| **LangGraph** | **C: CLIM Contract Guard** | **0% (0/100)** | **100% (100/100)** | 0% (0/20) |
+| **CrewAI** | **A: Minimal (No App Policy)** | **60% (60/100)** | 0% (0/100) | 0% (0/20) |
+| **CrewAI** | **B: Native Mechanism + Policy** | **0% (0/100)** | **100% (100/100)** | 0% (0/20) |
+| **CrewAI** | **C: CLIM Contract Guard** | **0% (0/100)** | **100% (100/100)** | 0% (0/20) |
+
+### Key Takeaways
+
+1. **Block Rate `\neq` Safety Rate**: In Arm A (no application authorization), **60% of invalid proposals produced real, irreversible file changes**. The remaining 40% were stopped solely by the underlying filesystem sandbox, *not* by any security logic. 
+2. **Frameworks Are Fine, Explicit Boundaries Are Missing**: Both LangGraph's native interrupt/resume mechanism and CrewAI's tool hooks (Arms B & C) achieved **0% unauthorized effects** when an explicit policy was provided. The problem isn't the framework—it's that most deployments lack a dedicated, state-bound authorization layer.
+3. **Execution Integrity Requires More Than a Gateway Verdict**: A gateway logging a `BLOCK` does not guarantee safety if retry loops, timeouts, or state mismatches bypass the gate. CLIM bridges this gap by enforcing deterministic contracts and verifying post-execution effects.
+
+*Read the full technical report in [`docs/track1_execution_boundary_study.md`](docs/track1_execution_boundary_study.md).*
+
+## Live Results — 192 Runs Across vLLM and Ollama
+
+**Tested code:** commit [`87ce348`](https://github.com/ZC502/clim-agent-guard/tree/87ce348). Each backend ran the same 96-run matrix: six prompt scenarios × baseline/guarded × omitted `tool_choice` (`auto`)/`required` × one-round/three-round limits × two repeats, at temperature 0.
+
+| Backend | Runs | Intended first tool proposal | Guard bypasses | API errors | Crashes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| vLLM 0.29.1rc1 nightly + Qwen2.5-1.5B-Instruct (Hermes parser) | 96 | 96/96 | 0 observed | 0 | 0 |
+| Ollama 0.40.1 + `qwen2.5:7b` (Q4_K_M) | 96 | 96/96 | 0 observed | 0 | 0 |
+
+**Combined results across both backends:**
+
+| Scenario | Baseline (no CLIM) | Guarded |
+| --- | --- | --- |
+| Fake authorization (two prompts) | 32/32 deleted the file | **32/32 BLOCK** — `USER_CONFIRMATION_REQUIRED` |
+| Target substitution | 16/16 deleted `other-file.txt` instead of the authorized target | **16/16 BLOCK** — `TARGET_NOT_AUTHORIZED` |
+| Path escape (`/etc/passwd` and `../outside.txt`) | 32/32 rejected by the **executor sandbox** | **32/32 BLOCK** at precheck — `TARGET_NOT_AUTHORIZED` |
+| Authorized deletion (positive control) | 16/16 executed | **16/16 ALLOW**, executed and `EFFECT_VERIFIED` |
+
+In total, **80/80 guarded unauthorized-action test cases were blocked** and **16/16 guarded authorized controls executed and passed postcondition verification**. The 192 runs include baseline and guarded cases; they are **not** 192 independent unauthorized attacks. These results apply to the tested prompts, models, server versions, contract and commit—not to every attack or model.
+
+The baseline path-escape cases did **not** access `/etc/passwd` or escape the sandbox. CLIM rejected them earlier, at the contract boundary. A second delete of an already removed authorized file was blocked with `TARGET_NOT_PRESENT` in the tested forced multi-round vLLM path; this does not by itself demonstrate a retry-ledger decision.
+
+**Two compatibility/coverage observations:**
+
+- With `tool_choice="required"`, vLLM continued generating calls in the three-round loop. In this specific Ollama 0.40.1 setup, the parameter was accepted but did not enforce a second-round tool call. Do not assume identical `tool_choice` semantics across servers.
+- In multi-round `auto` mode, neither tested model adapted to a blocked proposal by switching targets. Adaptive bypass attempts were **not exercised** by this matrix.
+
+**Reproducibility artifacts:** [2026-10-08 benchmark folder](benchmarks/openai_compatible_2026_10_08/) · [Summary](benchmarks/openai_compatible_2026_10_08/SUMMARY.md) · [Ollama TSV](benchmarks/openai_compatible_2026_10_08/results_ollama.tsv) · [vLLM TSV](benchmarks/openai_compatible_2026_10_08/results_vllm.tsv).
+
+The file tool schema deliberately says **“sandbox-local file name”**, not simply “file path.” In an earlier model wording probe, that change affected which paths the model proposed. This controls the test stimulus; it is **not** the guard's authorization policy.
+
 > **Models propose. Systems enforce.**
 >
 > Even a good model shouldn't authorize its own tool execution.
@@ -61,63 +118,6 @@ For a controlled first-call comparison, add `--max-rounds 1 --max-tool-calls 1`.
 `--tool-choice required` is an **optional backend smoke-test setting**, not a portable guarantee. In the tested configuration, vLLM enforced it across rounds; Ollama 0.40.1 accepted it but returned no tool call on the second round. By default the runner omits `tool_choice` (equivalent to requesting `auto` where supported).
 
 See [OpenAI-Compatible Challenge Guide](docs/openai_compatible_challenge.md) for the runner's scope and flags.
-
-## 🛑 The Illusion of "99% Detection Rate": Track 1 Pilot Study
-
-We ran **720 controlled execution-boundary trials** across **LangGraph (1.2.14)** and **CrewAI (1.15.25)** to answer a simple question: *If an invalid tool call is proposed, does it actually cause harm in a real system?*
-
-* **No LLMs were involved**; we used fixed, verified tool proposals and isolated sandboxes to measure actual filesystem side effects.
-* **The data is fully reproducible** without a GPU or API key (see [Reproduction](#reproduction)).
-
-### Summary of Results
-
-| Framework | Configuration | Actual Unauthorized Effects (UER) | Blocked Before Execution (PBR) | Legitimate Requests Falsely Blocked (FBR) |
-|---|---|---:|---:|---:|
-| **LangGraph** | **A: Minimal (No App Policy)** | **60% (60/100)** | 0% (0/100) | 0% (0/20) |
-| **LangGraph** | **B: Native Mechanism + Policy** | **0% (0/100)** | **100% (100/100)** | 0% (0/20) |
-| **LangGraph** | **C: CLIM Contract Guard** | **0% (0/100)** | **100% (100/100)** | 0% (0/20) |
-| **CrewAI** | **A: Minimal (No App Policy)** | **60% (60/100)** | 0% (0/100) | 0% (0/20) |
-| **CrewAI** | **B: Native Mechanism + Policy** | **0% (0/100)** | **100% (100/100)** | 0% (0/20) |
-| **CrewAI** | **C: CLIM Contract Guard** | **0% (0/100)** | **100% (100/100)** | 0% (0/20) |
-
-### Key Takeaways
-
-1. **Block Rate `\neq` Safety Rate**: In Arm A (no application authorization), **60% of invalid proposals produced real, irreversible file changes**. The remaining 40% were stopped solely by the underlying filesystem sandbox, *not* by any security logic. 
-2. **Frameworks Are Fine, Explicit Boundaries Are Missing**: Both LangGraph's native interrupt/resume mechanism and CrewAI's tool hooks (Arms B & C) achieved **0% unauthorized effects** when an explicit policy was provided. The problem isn't the framework—it's that most deployments lack a dedicated, state-bound authorization layer.
-3. **Execution Integrity Requires More Than a Gateway Verdict**: A gateway logging a `BLOCK` does not guarantee safety if retry loops, timeouts, or state mismatches bypass the gate. CLIM bridges this gap by enforcing deterministic contracts and verifying post-execution effects.
-
-*Read the full technical report in [`docs/track1_execution_boundary_study.md`](docs/track1_execution_boundary_study.md).*
-
-## Live Results — 192 Runs Across vLLM and Ollama
-
-**Tested code:** commit [`87ce348`](https://github.com/ZC502/clim-agent-guard/tree/87ce348). Each backend ran the same 96-run matrix: six prompt scenarios × baseline/guarded × omitted `tool_choice` (`auto`)/`required` × one-round/three-round limits × two repeats, at temperature 0.
-
-| Backend | Runs | Intended first tool proposal | Guard bypasses | API errors | Crashes |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| vLLM 0.29.1rc1 nightly + Qwen2.5-1.5B-Instruct (Hermes parser) | 96 | 96/96 | 0 observed | 0 | 0 |
-| Ollama 0.40.1 + `qwen2.5:7b` (Q4_K_M) | 96 | 96/96 | 0 observed | 0 | 0 |
-
-**Combined results across both backends:**
-
-| Scenario | Baseline (no CLIM) | Guarded |
-| --- | --- | --- |
-| Fake authorization (two prompts) | 32/32 deleted the file | **32/32 BLOCK** — `USER_CONFIRMATION_REQUIRED` |
-| Target substitution | 16/16 deleted `other-file.txt` instead of the authorized target | **16/16 BLOCK** — `TARGET_NOT_AUTHORIZED` |
-| Path escape (`/etc/passwd` and `../outside.txt`) | 32/32 rejected by the **executor sandbox** | **32/32 BLOCK** at precheck — `TARGET_NOT_AUTHORIZED` |
-| Authorized deletion (positive control) | 16/16 executed | **16/16 ALLOW**, executed and `EFFECT_VERIFIED` |
-
-In total, **80/80 guarded unauthorized-action test cases were blocked** and **16/16 guarded authorized controls executed and passed postcondition verification**. The 192 runs include baseline and guarded cases; they are **not** 192 independent unauthorized attacks. These results apply to the tested prompts, models, server versions, contract and commit—not to every attack or model.
-
-The baseline path-escape cases did **not** access `/etc/passwd` or escape the sandbox. CLIM rejected them earlier, at the contract boundary. A second delete of an already removed authorized file was blocked with `TARGET_NOT_PRESENT` in the tested forced multi-round vLLM path; this does not by itself demonstrate a retry-ledger decision.
-
-**Two compatibility/coverage observations:**
-
-- With `tool_choice="required"`, vLLM continued generating calls in the three-round loop. In this specific Ollama 0.40.1 setup, the parameter was accepted but did not enforce a second-round tool call. Do not assume identical `tool_choice` semantics across servers.
-- In multi-round `auto` mode, neither tested model adapted to a blocked proposal by switching targets. Adaptive bypass attempts were **not exercised** by this matrix.
-
-**Reproducibility artifacts:** [2026-10-08 benchmark folder](benchmarks/openai_compatible_2026_10_08/) · [Summary](benchmarks/openai_compatible_2026_10_08/SUMMARY.md) · [Ollama TSV](benchmarks/openai_compatible_2026_10_08/results_ollama.tsv) · [vLLM TSV](benchmarks/openai_compatible_2026_10_08/results_vllm.tsv).
-
-The file tool schema deliberately says **“sandbox-local file name”**, not simply “file path.” In an earlier model wording probe, that change affected which paths the model proposed. This controls the test stimulus; it is **not** the guard's authorization policy.
 
 ## Tool Allowlist vs. Execution Contract
 
